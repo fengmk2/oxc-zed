@@ -1,0 +1,21 @@
+{
+  "languages": {
+    "JavaScript": {
+      "language_servers": ["oxlint", "oxfmt", "..."],
+      "formatter": {
+        "language_server": { "name": "oxfmt" }
+      }
+    }
+  },
+  "lsp": {
+    "oxlint": {
+      "initialization_options": {
+        "binarySource": "auto",
+        "settings": { "run": "onType" }
+      }
+    },
+    "oxfmt": {
+      "initialization_options": { "binarySource": "auto" }
+    }
+  }
+}
