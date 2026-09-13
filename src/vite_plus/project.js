@@ -34,7 +34,8 @@ function ancestors(start) {
   let dir = path.resolve(start);
   while (true) {
     const pkg = readJson(path.join(dir, "package.json"));
-    const boundary = fs.existsSync(path.join(dir, "pnpm-workspace.yaml")) ||
+    const boundary =
+      fs.existsSync(path.join(dir, "pnpm-workspace.yaml")) ||
       fs.existsSync(path.join(dir, "lerna.json")) ||
       (pkg !== null && Object.hasOwn(pkg, "workspaces"));
     directories.push({
@@ -65,7 +66,11 @@ function readHeader(file) {
 function shimTarget(header) {
   // Match complete forwarding templates, not arbitrary quoted paths. Custom
   // scripts can set environment variables or add arguments that must survive.
-  let script = header.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join("\n");
+  let script = header
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
   const shellPreamble = String.raw`#!/bin/sh
 basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
 case \`uname\` in
@@ -79,12 +84,17 @@ esac
   if (script.startsWith(shellPreamble)) {
     script = script.slice(shellPreamble.length);
     // pnpm adds only module search paths to npm's forwarding template.
-    script = script.replace(/^if \[ -z "\$NODE_PATH" \]; then\nexport NODE_PATH="([^"$`\n]*)"\nelse\nexport NODE_PATH="\1:\$NODE_PATH"\nfi\n/, "");
-    const match = new RegExp([
-      '^if \\[ -x "\\$basedir/node" \\]; then\\n',
-      'exec "\\$basedir/node" +"(\\$basedir/[^"$`\\n]+)" "\\$@"\\n',
-      'else\\nexec node +"\\1" "\\$@"\\nfi$',
-    ].join("")).exec(script);
+    script = script.replace(
+      /^if \[ -z "\$NODE_PATH" \]; then\nexport NODE_PATH="([^"$`\n]*)"\nelse\nexport NODE_PATH="\1:\$NODE_PATH"\nfi\n/,
+      "",
+    );
+    const match = new RegExp(
+      [
+        '^if \\[ -x "\\$basedir/node" \\]; then\\n',
+        'exec "\\$basedir/node" +"(\\$basedir/[^"$`\\n]+)" "\\$@"\\n',
+        'else\\nexec node +"\\1" "\\$@"\\nfi$',
+      ].join(""),
+    ).exec(script);
     return match?.[1];
   }
 
@@ -99,12 +109,14 @@ CALL :find_dp0
 `;
   if (script.startsWith(cmdPreamble)) {
     script = script.slice(cmdPreamble.length);
-    const match = new RegExp([
-      '^IF EXIST "%dp0%\\\\node\\.exe" \\(\\nSET "_prog=%dp0%\\\\node\\.exe"\\n',
-      '\\) ELSE \\(\\nSET "_prog=node"\\n(?:SET PATHEXT=%PATHEXT:;\\.JS;=;%\\n)?\\)\\n',
-      'endLocal & goto #_undefined_# 2>NUL \\|\\| title %COMSPEC% & ',
-      '(?:set PATHEXT=%PATHEXT:;\\.JS;=;% & )?"%_prog%" +"([^"\\n]+)" %\\*$',
-    ].join("")).exec(script);
+    const match = new RegExp(
+      [
+        '^IF EXIST "%dp0%\\\\node\\.exe" \\(\\nSET "_prog=%dp0%\\\\node\\.exe"\\n',
+        '\\) ELSE \\(\\nSET "_prog=node"\\n(?:SET PATHEXT=%PATHEXT:;\\.JS;=;%\\n)?\\)\\n',
+        "endLocal & goto #_undefined_# 2>NUL \\|\\| title %COMSPEC% & ",
+        '(?:set PATHEXT=%PATHEXT:;\\.JS;=;% & )?"%_prog%" +"([^"\\n]+)" %\\*$',
+      ].join(""),
+    ).exec(script);
     return match?.[1];
   }
 }
@@ -120,7 +132,8 @@ function executable(file) {
   // Only unwrap a complete known shim, including symlinks to global shims.
   const recorded = fs.statSync(real).size <= 8192 && shimTarget(header);
   if (recorded) {
-    const target = recorded.replace(/^(?:\$basedir|%~dp0|%dp0%)[\\/]/, path.dirname(real) + path.sep)
+    const target = recorded
+      .replace(/^(?:\$basedir|%~dp0|%dp0%)[\\/]/, path.dirname(real) + path.sep)
       .replaceAll("\\", path.sep);
     if (!path.isAbsolute(target) || path.resolve(target) === real || !isFile(target)) {
       return { path: file, node: false };
