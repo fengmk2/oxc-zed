@@ -49,7 +49,7 @@ A global or transitive installation alone does not select Vite+. If Vite+ is
 selected but no executable is available, Zed shows an install hint. Install the
 project's dependencies and run **editor: restart language server** to retry.
 
-Select the source for each tool with `initialization_options.binarySource`:
+Select the source for each tool with `initialization_options.settings.binarySource`:
 
 | Value | Behavior |
 | --- | --- |
@@ -63,16 +63,20 @@ For example, use standalone Oxlint with Vite+ formatting:
 {
   "lsp": {
     "oxlint": {
-      "initialization_options": { "binarySource": "oxc" }
+      "initialization_options": {
+        "settings": { "binarySource": "oxc" }
+      }
     },
     "oxfmt": {
-      "initialization_options": { "binarySource": "vite-plus" }
+      "initialization_options": {
+        "settings": { "binarySource": "vite-plus" }
+      }
     }
   }
 }
 ```
 
-Set `initialization_options.vpPath` for either tool to use a particular `vp`
+Set `initialization_options.settings.vpPath` for either tool to use a particular `vp`
 executable, Node entry, or npm/pnpm shim. Relative paths are resolved from the
 opened worktree. Custom wrappers keep their environment setup and arguments.
 For example:
@@ -82,7 +86,9 @@ For example:
   "lsp": {
     "oxfmt": {
       "initialization_options": {
-        "vpPath": "./node_modules/vite-plus/bin/vp"
+        "settings": {
+          "vpPath": "./node_modules/vite-plus/bin/vp"
+        }
       }
     }
   }
@@ -94,6 +100,10 @@ overrides and take priority over source selection. Supply both fields together.
 `binary.env` applies to discovery and server launch, including `PATH` overrides.
 Discovery resolves relative `PATH` entries from the opened worktree.
 Restart the affected language server after changing its source or executable.
+
+You can also put these options in `lsp.<tool>.settings`. Its keys override matching
+keys in `initialization_options.settings` for source selection and the extension's
+configuration callbacks.
 
 Vite+ servers run from the declaring package (or the nearest package in forced
 mode). They receive `disableNestedConfig: true` for lint and

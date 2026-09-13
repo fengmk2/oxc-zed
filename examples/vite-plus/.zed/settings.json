@@ -10,12 +10,13 @@
   "lsp": {
     "oxlint": {
       "initialization_options": {
-        "binarySource": "auto",
-        "settings": { "run": "onType" }
+        "settings": { "binarySource": "auto", "run": "onType" }
       }
     },
     "oxfmt": {
-      "initialization_options": { "binarySource": "auto" }
+      "initialization_options": {
+        "settings": { "binarySource": "auto" }
+      }
     }
   }
 }

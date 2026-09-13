@@ -34,7 +34,7 @@ pub trait ZedLspSupport {
             return Ok(command);
         }
 
-        let options = Options::from_initialization(settings.initialization_options.as_ref())?;
+        let options = Options::from_settings(configured_settings(&settings).as_ref())?;
         let node = node_binary_path()?;
         let directories = vite_plus::inspect(
             &node,
@@ -54,7 +54,7 @@ pub trait ZedLspSupport {
             };
             let path = executable["path"].as_str().ok_or_else(|| {
                 format!(
-                    "Vite+ selected for {} but vp was not found. Install dependencies (for example, pnpm install), or set initialization_options.vpPath, then restart the language server.",
+                    "Vite+ selected for {} but vp was not found. Install dependencies (for example, pnpm install), or set initialization_options.settings.vpPath, then restart the language server.",
                     project.root
                 )
             })?;
@@ -101,7 +101,7 @@ pub trait ZedLspSupport {
             return Ok(false);
         }
         // Zed may request configuration before requesting a command.
-        let options = Options::from_initialization(settings.initialization_options.as_ref())?;
+        let options = Options::from_settings(configured_settings(settings).as_ref())?;
         let directories = vite_plus::inspect(
             &node_binary_path()?,
             "ancestors",
@@ -123,7 +123,7 @@ pub trait ZedLspSupport {
     ) -> Result<Option<Value>> {
         let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)?;
         let vite_plus = self.uses_vite_plus(&settings, worktree)?;
-        Ok(initialization_options(settings.initialization_options, self.package_name(), vite_plus))
+        Ok(initialization_options(&settings, self.package_name(), vite_plus))
     }
 
     fn language_server_workspace_configuration(
@@ -133,7 +133,7 @@ pub trait ZedLspSupport {
     ) -> Result<Option<Value>> {
         let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)?;
         let vite_plus = self.uses_vite_plus(&settings, worktree)?;
-        Ok(workspace_configuration(settings, self.package_name(), vite_plus))
+        Ok(workspace_configuration(&settings, self.package_name(), vite_plus))
     }
 
     fn update_extension_language_server_if_outdated(
@@ -200,38 +200,39 @@ fn server_env(settings: &LspSettings, shell: EnvVars, root: &str, tool: &str) ->
     env.into_iter().collect()
 }
 
-fn initialization_options(
-    mut options: Option<Value>,
-    tool: &str,
-    vite_plus: bool,
-) -> Option<Value> {
-    if let Some(Value::Object(options)) = options.as_mut() {
-        options.remove("binarySource");
-        options.remove("vpPath");
-    }
-    if vite_plus {
-        let options = options.get_or_insert_with(|| json!({}));
-        if !options.is_object() {
-            *options = json!({});
-        }
-        force_nested_config(
-            options.as_object_mut().unwrap().entry("settings").or_insert_with(|| json!({})),
-            tool,
-        );
-    }
-    options
-}
-
-fn workspace_configuration(settings: LspSettings, tool: &str, vite_plus: bool) -> Option<Value> {
-    let options = initialization_options(settings.initialization_options, tool, vite_plus);
-    let mut config = options.and_then(|v| v.get("settings").cloned());
-    if let Some(settings) = settings.settings {
+fn configured_settings(settings: &LspSettings) -> Option<Value> {
+    let mut config =
+        settings.initialization_options.as_ref().and_then(|v| v.get("settings")).cloned();
+    // Zed's workspace settings override the matching initialization settings.
+    // Use the same values for command selection and both configuration callbacks.
+    if let Some(settings) = &settings.settings {
         let target = config.get_or_insert_with(|| json!({}));
         if let (Some(target), Some(settings)) = (target.as_object_mut(), settings.as_object()) {
             target.extend(settings.clone());
         } else {
-            *target = settings;
+            *target = settings.clone();
         }
+    }
+    config
+}
+
+fn initialization_options(settings: &LspSettings, tool: &str, vite_plus: bool) -> Option<Value> {
+    let mut options = settings.initialization_options.clone();
+    if let Some(config) = workspace_configuration(settings, tool, vite_plus) {
+        let options = options.get_or_insert_with(|| json!({}));
+        if !options.is_object() {
+            *options = json!({});
+        }
+        options["settings"] = config;
+    }
+    options
+}
+
+fn workspace_configuration(settings: &LspSettings, tool: &str, vite_plus: bool) -> Option<Value> {
+    let mut config = configured_settings(settings);
+    if let Some(Value::Object(settings)) = config.as_mut() {
+        settings.remove("binarySource");
+        settings.remove("vpPath");
     }
     if vite_plus {
         force_nested_config(config.get_or_insert_with(|| json!({})), tool);
@@ -257,7 +258,7 @@ mod tests {
     fn custom_commands_override_invalid_source_settings_and_allow_env_only_settings() {
         let settings = from_value(json!({
             "binary": {"path":"/custom/oxlint", "arguments":["--lsp"]},
-            "initialization_options": {"binarySource":"invalid", "vpPath":"missing"}
+            "initialization_options": {"settings":{"binarySource":"invalid", "vpPath":"missing"}}
         }))
         .unwrap();
         let command =
@@ -286,20 +287,28 @@ mod tests {
             (OXLINT_SERVER_ID, "disableNestedConfig"),
             (OXFMT_SERVER_ID, "fmt.disableNestedConfig"),
         ] {
-            let original = json!({"binarySource":"vite-plus", "vpPath":"/custom/vp", "settings":{key:false, "run":"onSave", "configPath":"custom.json"}});
-            let options = initialization_options(Some(original.clone()), tool, true).unwrap();
+            let original = json!({"settings":{"binarySource":"vite-plus", "vpPath":"/custom/vp", key:false, "run":"onSave", "configPath":"custom.json"}});
+            let settings = from_value(json!({"initialization_options":original})).unwrap();
+            let options = initialization_options(&settings, tool, true).unwrap();
             assert_eq!(options["settings"][key], true);
             assert_eq!(options["settings"]["run"], "onSave");
-            assert!(options.get("binarySource").is_none());
-            assert!(options.get("vpPath").is_none());
+            assert!(options["settings"].get("binarySource").is_none());
+            assert!(options["settings"].get("vpPath").is_none());
             assert_eq!(original["settings"][key], false);
-            let config = workspace_configuration(from_value(json!({"initialization_options":original, "settings":{key:false, "run":"onType"}})).unwrap(), tool, true).unwrap();
+            let config = workspace_configuration(&from_value(json!({"initialization_options":original, "settings":{key:false, "run":"onType"}})).unwrap(), tool, true).unwrap();
             assert_eq!(config[key], true);
             assert_eq!(config["run"], "onType");
             assert_eq!(config["configPath"], "custom.json");
+            assert!(config.get("binarySource").is_none());
+            assert!(config.get("vpPath").is_none());
             for value in [None, Some(Value::Null), Some(json!({"settings":null}))] {
                 assert_eq!(
-                    initialization_options(value, tool, true).unwrap()["settings"][key],
+                    initialization_options(
+                        &LspSettings { initialization_options: value, ..Default::default() },
+                        tool,
+                        true
+                    )
+                    .unwrap()["settings"][key],
                     true
                 );
             }
@@ -310,19 +319,70 @@ mod tests {
     fn standalone_configuration_preserves_user_values() {
         let original =
             json!({"settings":{"disableNestedConfig":false, "fmt.disableNestedConfig":false}});
+        let settings = from_value(json!({"initialization_options":original})).unwrap();
         assert_eq!(
-            initialization_options(Some(original.clone()), OXLINT_SERVER_ID, false),
+            initialization_options(&settings, OXLINT_SERVER_ID, false),
             Some(original.clone())
         );
         assert_eq!(
-            workspace_configuration(
-                from_value(json!({"initialization_options":original})).unwrap(),
-                OXLINT_SERVER_ID,
-                false
-            ),
+            workspace_configuration(&settings, OXLINT_SERVER_ID, false),
             Some(original["settings"].clone())
         );
-        assert_eq!(initialization_options(None, OXLINT_SERVER_ID, false), None);
+        assert_eq!(initialization_options(&LspSettings::default(), OXLINT_SERVER_ID, false), None);
+    }
+
+    #[test]
+    fn source_selection_reads_nested_settings_and_workspace_overrides() {
+        use crate::vite_plus::BinarySource;
+        for tool in [OXLINT_SERVER_ID, OXFMT_SERVER_ID] {
+            let mut settings: LspSettings = from_value(json!({
+                "initialization_options": {
+                    "binarySource":"oxc", "vpPath":"ignored-top-level-path",
+                    "settings":{"binarySource":"vite-plus", "vpPath":"local/vp", "run":"onSave"}
+                }
+            }))
+            .unwrap();
+            assert_eq!(
+                Options::from_settings(configured_settings(&settings).as_ref()).unwrap(),
+                Options { source: BinarySource::VitePlus, vp_path: Some("local/vp".into()) }
+            );
+            settings.settings = Some(json!({"vpPath":"other/vp", "run":"onType"}));
+            assert_eq!(
+                Options::from_settings(configured_settings(&settings).as_ref()).unwrap(),
+                Options { source: BinarySource::VitePlus, vp_path: Some("other/vp".into()) }
+            );
+            let options = initialization_options(&settings, tool, true).unwrap();
+            let config = workspace_configuration(&settings, tool, true).unwrap();
+            assert_eq!(options["settings"], config);
+            assert_eq!(config["run"], "onType");
+            assert!(config.get("binarySource").is_none());
+            assert!(config.get("vpPath").is_none());
+
+            settings.settings = Some(json!({"binarySource":"oxc", "vpPath":false}));
+            assert_eq!(
+                Options::from_settings(configured_settings(&settings).as_ref()).unwrap(),
+                Options { source: BinarySource::Oxc, vp_path: None }
+            );
+            let config = workspace_configuration(&settings, tool, false).unwrap();
+            assert_eq!(config, json!({"run":"onSave"}));
+            assert_eq!(settings.initialization_options.unwrap()["settings"]["vpPath"], "local/vp");
+        }
+
+        let mut settings: LspSettings = from_value(json!({
+            "initialization_options":{"binarySource":"vite-plus", "vpPath":"ignored"}
+        }))
+        .unwrap();
+        assert_eq!(
+            Options::from_settings(configured_settings(&settings).as_ref()).unwrap(),
+            Options::default()
+        );
+        settings.settings = Some(json!({"binarySource":"vite-plus", "vpPath":"workspace/vp"}));
+        assert_eq!(
+            Options::from_settings(configured_settings(&settings).as_ref()).unwrap(),
+            Options { source: BinarySource::VitePlus, vp_path: Some("workspace/vp".into()) }
+        );
+        settings.settings = Some(json!({"binarySource":"invalid"}));
+        assert!(Options::from_settings(configured_settings(&settings).as_ref()).is_err());
     }
 
     #[test]

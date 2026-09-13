@@ -19,7 +19,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn from_initialization(options: Option<&Value>) -> Result<Self> {
+    pub fn from_settings(options: Option<&Value>) -> Result<Self> {
         let source = match options.and_then(|v| v.get("binarySource")) {
             None | Some(Value::Null) => BinarySource::Auto,
             Some(Value::String(value)) if value == "auto" => BinarySource::Auto,

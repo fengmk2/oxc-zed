@@ -254,11 +254,11 @@ fn source_options_are_independent_and_explicit_paths_win() {
     assert!(
         detect_project(&dirs, &Options { source: BinarySource::VitePlus, vp_path: None }).is_some()
     );
-    assert_eq!(Options::from_initialization(None).unwrap(), Options::default());
+    assert_eq!(Options::from_settings(None).unwrap(), Options::default());
     for value in
         [json!({"binarySource":"wrong"}), json!({"binarySource":false}), json!({"vpPath":""})]
     {
-        assert!(Options::from_initialization(Some(&value)).is_err());
+        assert!(Options::from_settings(Some(&value)).is_err());
     }
 }
 
@@ -420,7 +420,7 @@ fn standalone_subpackage_uses_hoisted_install_without_vite_plus_wrappers() {
     tree.put("repo/node_modules/oxlint/package.json", r#"{"name":"oxlint-alias"}"#);
     assert!(standalone_path(&tree.directories("repo/app"), "oxlint").is_some());
     assert_eq!(
-        Options::from_initialization(Some(&json!({"binarySource":"oxc", "vpPath":false}))).unwrap(),
+        Options::from_settings(Some(&json!({"binarySource":"oxc", "vpPath":false}))).unwrap(),
         Options { source: BinarySource::Oxc, vp_path: None }
     );
 }
