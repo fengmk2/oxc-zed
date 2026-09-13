@@ -1,4 +1,5 @@
 use super::*;
+use crate::binary_resolver::{INSPECT_SCRIPT, standalone_path};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -8,7 +9,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use zed_extension_api::serde_json::json;
+use zed_extension_api::serde_json::{from_slice, json};
 
 const NPM_SHELL_SHIM: &str = include_str!("fixtures/npm-vp.sh");
 const NPM_CMD_SHIM: &str = include_str!("fixtures/npm-vp.cmd");
@@ -67,7 +68,7 @@ fn node() -> &'static str {
 
 fn probe_output(mode: &str, root: &str, tool: &str, search_path: &str) -> Output {
     Command::new(node())
-        .args(["-e", PROJECT_SCRIPT, "--", mode, root, tool])
+        .args(["-e", INSPECT_SCRIPT, "--", mode, root, tool])
         .env("PATH", search_path)
         .output()
         .unwrap()
@@ -291,7 +292,7 @@ fn global_relative_path_entries_use_the_worktree_directory() {
     tree.put("host/tools/vp", "#!/usr/bin/env node\n");
     let search_path = std::env::join_paths([Path::new("missing"), Path::new("tools")]).unwrap();
     let output = Command::new(node())
-        .args(["-e", PROJECT_SCRIPT, "--", "global", &tree.path("repo"), "vp"])
+        .args(["-e", INSPECT_SCRIPT, "--", "global", &tree.path("repo"), "vp"])
         .current_dir(tree.path("host"))
         .env("PATH", search_path)
         .output()

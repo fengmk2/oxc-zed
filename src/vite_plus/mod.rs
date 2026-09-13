@@ -1,7 +1,7 @@
-use zed_extension_api::serde_json::{Value, from_slice};
-use zed_extension_api::{EnvVars, Result, process};
+use crate::binary_resolver::declares_package;
+use zed_extension_api::Result;
+use zed_extension_api::serde_json::Value;
 
-pub const PROJECT_SCRIPT: &str = include_str!("project.js");
 pub const LAUNCH_SCRIPT: &str = include_str!("launch_vp.js");
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -39,21 +39,10 @@ impl Options {
     }
 }
 
-pub fn standalone_path<'a>(directories: &'a [Value], package: &str) -> Option<&'a str> {
-    let index = directories.iter().position(|dir| declares_package(&dir["package"], package))?;
-    directories[index..].iter().find_map(|dir| dir["standalone"].as_str())
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Project {
     pub root: String,
     pub vp_path: Option<String>,
-}
-
-pub fn declares_package(package: &Value, name: &str) -> bool {
-    ["dependencies", "devDependencies"]
-        .iter()
-        .any(|key| package[*key][name].as_str().is_some_and(|version| !version.is_empty()))
 }
 
 /// Port of RFC #1614's identity and local resolution phases. The filesystem
@@ -73,20 +62,6 @@ pub fn detect_project(directories: &[Value], options: &Options) -> Option<Projec
         directories[index..].iter().find_map(|dir| dir["vp"].as_str().map(str::to_owned))
     });
     Some(Project { root, vp_path })
-}
-
-pub fn inspect(node: &str, mode: &str, path: &str, tool: &str, env: &EnvVars) -> Result<Value> {
-    let output = process::Command::new(node)
-        .args(["-e", PROJECT_SCRIPT, "--", mode, path, tool])
-        .envs(env.clone())
-        .output()?;
-    if output.status != Some(0) {
-        return Err(format!(
-            "Could not inspect the {tool} installation: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    from_slice(&output.stdout).map_err(|err| format!("Invalid installation information: {err}"))
 }
 
 #[cfg(test)]

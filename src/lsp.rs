@@ -1,3 +1,4 @@
+use crate::binary_resolver;
 use crate::vite_plus::{self, LAUNCH_SCRIPT, Options};
 use log::debug;
 use std::{collections::BTreeMap, env};
@@ -36,7 +37,7 @@ pub trait ZedLspSupport {
 
         let options = Options::from_settings(configured_settings(&settings).as_ref())?;
         let node = node_binary_path()?;
-        let directories = vite_plus::inspect(
+        let directories = binary_resolver::inspect(
             &node,
             "ancestors",
             &worktree.root_path(),
@@ -48,9 +49,9 @@ pub trait ZedLspSupport {
         if let Some(project) = vite_plus::detect_project(directories, &options) {
             let executable = if let Some(path) = &project.vp_path {
                 // Explicit relative paths are relative to the opened worktree.
-                vite_plus::inspect(&node, "executable", &worktree.root_path(), path, &env)?
+                binary_resolver::inspect(&node, "executable", &worktree.root_path(), path, &env)?
             } else {
-                vite_plus::inspect(&node, "global", &worktree.root_path(), "vp", &env)?
+                binary_resolver::inspect(&node, "global", &worktree.root_path(), "vp", &env)?
             };
             let path = executable["path"].as_str().ok_or_else(|| {
                 format!(
@@ -73,7 +74,7 @@ pub trait ZedLspSupport {
             return Ok(command);
         }
 
-        let path = vite_plus::standalone_path(directories, self.package_name());
+        let path = binary_resolver::standalone_path(directories, self.package_name());
         let path = if let Some(path) = path {
             path.to_owned()
         } else {
@@ -108,7 +109,7 @@ pub trait ZedLspSupport {
         }
         // Zed may request configuration before requesting a command.
         let options = Options::from_settings(configured_settings(settings).as_ref())?;
-        let directories = vite_plus::inspect(
+        let directories = binary_resolver::inspect(
             &node_binary_path()?,
             "ancestors",
             &worktree.root_path(),

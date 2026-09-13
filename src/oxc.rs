@@ -1,3 +1,4 @@
+mod binary_resolver;
 mod lsp;
 mod oxfmt;
 mod oxlint;
