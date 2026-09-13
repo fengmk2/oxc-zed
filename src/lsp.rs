@@ -92,13 +92,19 @@ pub trait ZedLspSupport {
         Ok(Command { command: node, args: vec![path, "--lsp".into()], env })
     }
 
-    fn uses_vite_plus(&self, settings: &LspSettings, worktree: &Worktree) -> Result<bool> {
-        if let Some(source) = self.sources().get(&worktree.id()) {
-            // Configuration follows the running command until a server restart.
-            return Ok(*source);
+    fn known_source(&self, settings: &LspSettings, worktree_id: u64) -> Option<bool> {
+        // Zed launches custom binaries without calling language_server_command,
+        // so an override must win even when a previous Vite+ selection is cached.
+        if settings.binary.as_ref().and_then(|binary| binary.path.as_ref()).is_some() {
+            return Some(false);
         }
-        if custom_command(settings, Vec::new())?.is_some() {
-            return Ok(false);
+        self.sources().get(&worktree_id).copied()
+    }
+
+    fn uses_vite_plus(&self, settings: &LspSettings, worktree: &Worktree) -> Result<bool> {
+        if let Some(source) = self.known_source(settings, worktree.id()) {
+            // Configuration follows the running command until a server restart.
+            return Ok(source);
         }
         // Zed may request configuration before requesting a command.
         let options = Options::from_settings(configured_settings(settings).as_ref())?;
@@ -167,14 +173,11 @@ fn custom_command(settings: &LspSettings, env: EnvVars) -> Result<Option<Command
         return Ok(None);
     };
     match (&binary.path, &binary.arguments) {
-        (Some(path), Some(args)) => {
-            Ok(Some(Command { command: path.clone(), args: args.clone(), env }))
+        (Some(path), args) => {
+            Ok(Some(Command { command: path.clone(), args: args.clone().unwrap_or_default(), env }))
         }
         (None, None) => Ok(None),
-        _ => {
-            Err("When supplying binary.arguments, binary.path must be supplied (or vice-versa)."
-                .into())
-        }
+        _ => Err("When supplying binary.arguments, binary.path must be supplied.".into()),
     }
 }
 
@@ -204,7 +207,8 @@ fn configured_settings(settings: &LspSettings) -> Option<Value> {
     let mut config =
         settings.initialization_options.as_ref().and_then(|v| v.get("settings")).cloned();
     // Zed's workspace settings override the matching initialization settings.
-    // Use the same values for command selection and both configuration callbacks.
+    // Both callbacks use this merge; Zed subsequently reapplies the user's
+    // initialization_options before sending the initialize request.
     if let Some(settings) = &settings.settings {
         let target = config.get_or_insert_with(|| json!({}));
         if let (Some(target), Some(settings)) = (target.as_object_mut(), settings.as_object()) {
@@ -266,11 +270,13 @@ mod tests {
         assert_eq!(command.command, "/custom/oxlint");
         assert_eq!(command.args, ["--lsp"]);
         assert_eq!(command.env, [("TEST".into(), "value".into())]);
-        for binary in [json!({"path":"oxlint"}), json!({"arguments":["--lsp"]})] {
-            assert!(
-                custom_command(&from_value(json!({"binary":binary})).unwrap(), vec![]).is_err()
-            );
-        }
+        let path_only = from_value(json!({"binary":{"path":"/custom/wrapper"}})).unwrap();
+        let command = custom_command(&path_only, vec![]).unwrap().unwrap();
+        assert_eq!(command.command, "/custom/wrapper");
+        assert!(command.args.is_empty());
+        assert!(custom_command(
+            &from_value(json!({"binary":{"arguments":["--lsp"]}})).unwrap(), vec![],
+        ).is_err());
         assert!(
             custom_command(
                 &from_value(json!({"binary":{"env":{"TEST":"value"}}})).unwrap(),
@@ -395,6 +401,37 @@ mod tests {
         assert_eq!(lint.sources().get(&1), Some(&true));
         assert_eq!(lint.sources().get(&2), Some(&false));
         assert_eq!(fmt.sources().get(&1), Some(&false));
+    }
+
+    #[test]
+    fn custom_binary_overrides_cached_vite_plus_configuration() {
+        let mut lint = crate::oxlint::ZedOxlintLsp::default();
+        let mut fmt = crate::oxfmt::ZedOxfmtLsp::default();
+        for server in [&mut lint as &mut dyn ZedLspSupport, &mut fmt] {
+            server.sources_mut().insert(1, true);
+            assert_eq!(server.known_source(&LspSettings::default(), 1), Some(true));
+            for binary in [
+                json!({"path":"/custom/wrapper"}),
+                json!({"path":"/custom/oxlint", "arguments":["--lsp"]}),
+            ] {
+                let original = json!({"settings": {
+                    "binarySource":"invalid", "vpPath":false,
+                    "disableNestedConfig":false, "fmt.disableNestedConfig":false,
+                }});
+                let settings =
+                    from_value(json!({"binary":binary,"initialization_options":original})).unwrap();
+                // Custom binaries bypass the command callback, including the
+                // cache reset, on both the first start and subsequent restarts.
+                for worktree_id in [1, 2] {
+                    let source = server.known_source(&settings, worktree_id).unwrap();
+                    assert!(!source);
+                    let config =
+                        workspace_configuration(&settings, server.package_name(), source).unwrap();
+                    assert_eq!(config["disableNestedConfig"], false);
+                    assert_eq!(config["fmt.disableNestedConfig"], false);
+                }
+            }
+        }
     }
 
     #[test]

@@ -95,22 +95,26 @@ For example:
 }
 ```
 
-Existing `binary.path` and `binary.arguments` settings remain complete command
-overrides and take priority over source selection. Supply both fields together.
+An existing `binary.path` setting remains a complete command override and takes
+priority over source selection, including after a restart. `binary.arguments` is
+optional when `binary.path` is set; omitted arguments default to an empty list.
 `binary.env` applies to discovery and server launch, including `PATH` overrides.
 Discovery resolves relative `PATH` entries from the opened worktree.
 Restart the affected language server after changing its source or executable.
 
 You can also put these options in `lsp.<tool>.settings`. Its keys override matching
-keys in `initialization_options.settings` for source selection and the extension's
-configuration callbacks.
+keys in `initialization_options.settings` for source selection and workspace
+configuration. During initialization, Zed reapplies `initialization_options`, so
+values there win when the same server option is set in both locations. Avoid
+setting the same server option to different values in these two locations.
 
 Vite+ servers run from the declaring package (or the nearest package in forced
-mode). They receive `disableNestedConfig: true` for lint and
-`fmt.disableNestedConfig: true` for formatting at initialization and during
-configuration updates. Saved settings and standalone servers keep their configured
-values. Arbitrary custom commands supplied through `binary.path` receive the
-settings you specify.
+mode). The extension sets `disableNestedConfig: true` for lint and
+`fmt.disableNestedConfig: true` for formatting. When using Vite+, leave these
+options unset or set them to `true`. Do not explicitly set either option to
+`false`: Zed reapplies user initialization options after the extension's defaults.
+Saved settings and standalone servers keep their configured values. Arbitrary
+custom commands supplied through `binary.path` receive the settings you specify.
 
 Node entries use Zed's Node runtime. Native `vp` executables run directly through
 the launcher. The launcher also makes that Node runtime available to child tools.
