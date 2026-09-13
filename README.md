@@ -74,7 +74,8 @@ For example, use standalone Oxlint with Vite+ formatting:
 
 Set `initialization_options.vpPath` for either tool to use a particular `vp`
 executable, Node entry, or npm/pnpm shim. Relative paths are resolved from the
-opened worktree. For example:
+opened worktree. Custom wrappers keep their environment setup and arguments.
+For example:
 
 ```json
 {
@@ -91,6 +92,7 @@ opened worktree. For example:
 Existing `binary.path` and `binary.arguments` settings remain complete command
 overrides and take priority over source selection. Supply both fields together.
 `binary.env` applies to discovery and server launch, including `PATH` overrides.
+Discovery resolves relative `PATH` entries from the opened worktree.
 Restart the affected language server after changing its source or executable.
 
 Vite+ servers run from the declaring package (or the nearest package in forced

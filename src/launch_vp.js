@@ -8,9 +8,13 @@ const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PA
 const searchPath = process.env[pathKey] || "";
 delete process.env[pathKey];
 process.env.PATH = path.dirname(process.execPath) + path.delimiter + searchPath;
-const child = spawn(loader === "node" ? process.execPath : executable,
-  [...(loader === "node" ? [executable] : []), tool, "--lsp"],
-  { cwd: root, env: process.env, stdio: "inherit" });
+const batch = loader !== "node" && process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
+const command = batch ? (process.env.ComSpec || process.env.COMSPEC || "cmd.exe")
+  : loader === "node" ? process.execPath : executable;
+const args = batch ? ["/d", "/s", "/c", `""${executable}" ${tool} --lsp"`]
+  : [...(loader === "node" ? [executable] : []), tool, "--lsp"];
+const child = spawn(command, args,
+  { cwd: root, env: process.env, stdio: "inherit", windowsVerbatimArguments: batch });
 child.on("error", (error) => {
   console.error(`${hint}\n${error.message}`);
   process.exitCode = 1;

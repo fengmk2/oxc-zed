@@ -62,6 +62,53 @@ function readHeader(file) {
   return header;
 }
 
+function shimTarget(header) {
+  // Match complete forwarding templates, not arbitrary quoted paths. Custom
+  // scripts can set environment variables or add arguments that must survive.
+  let script = header.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join("\n");
+  const shellPreamble = String.raw`#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+case \`uname\` in
+*CYGWIN*|*MINGW*|*MSYS*)
+if command -v cygpath > /dev/null 2>&1; then
+basedir=\`cygpath -w "$basedir"\`
+fi
+;;
+esac
+`.replaceAll("\\`", "`");
+  if (script.startsWith(shellPreamble)) {
+    script = script.slice(shellPreamble.length);
+    // pnpm adds only module search paths to npm's forwarding template.
+    script = script.replace(/^if \[ -z "\$NODE_PATH" \]; then\nexport NODE_PATH="([^"$`\n]*)"\nelse\nexport NODE_PATH="\1:\$NODE_PATH"\nfi\n/, "");
+    const match = new RegExp([
+      '^if \\[ -x "\\$basedir/node" \\]; then\\n',
+      'exec "\\$basedir/node" +"(\\$basedir/[^"$`\\n]+)" "\\$@"\\n',
+      'else\\nexec node +"\\1" "\\$@"\\nfi$',
+    ].join("")).exec(script);
+    return match?.[1];
+  }
+
+  const cmdPreamble = String.raw`@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+`;
+  if (script.startsWith(cmdPreamble)) {
+    script = script.slice(cmdPreamble.length);
+    const match = new RegExp([
+      '^IF EXIST "%dp0%\\\\node\\.exe" \\(\\nSET "_prog=%dp0%\\\\node\\.exe"\\n',
+      '\\) ELSE \\(\\nSET "_prog=node"\\n(?:SET PATHEXT=%PATHEXT:;\\.JS;=;%\\n)?\\)\\n',
+      'endLocal & goto #_undefined_# 2>NUL \\|\\| title %COMSPEC% & ',
+      '(?:set PATHEXT=%PATHEXT:;\\.JS;=;% & )?"%_prog%" +"([^"\\n]+)" %\\*$',
+    ].join("")).exec(script);
+    return match?.[1];
+  }
+}
+
 function executable(file) {
   if (!isFile(file)) return null;
   const real = fs.realpathSync(file);
@@ -70,18 +117,16 @@ function executable(file) {
     return { path: real, node: true };
   }
 
-  // npm and pnpm record the Node entry in their POSIX and Windows shims.
-  // Resolve that entry, including symlinks to global pnpm shims, instead of
-  // passing a shell script to Node or requiring cmd.exe on Windows.
-  const entryPattern = /["']([^"'\r\n]+)["']/g;
-  for (const match of header.matchAll(entryPattern)) {
-    const target = match[1].replace(/\$basedir|%~dp0|%dp0%/g, path.dirname(real) + path.sep);
-    if (!path.isAbsolute(target) || path.resolve(target) === real || !isFile(target)) continue;
+  // Only unwrap a complete known shim, including symlinks to global shims.
+  const recorded = fs.statSync(real).size <= 8192 && shimTarget(header);
+  if (recorded) {
+    const target = recorded.replace(/^(?:\$basedir|%~dp0|%dp0%)[\\/]/, path.dirname(real) + path.sep)
+      .replaceAll("\\", path.sep);
+    if (!path.isAbsolute(target) || path.resolve(target) === real || !isFile(target)) {
+      return { path: file, node: false };
+    }
     const text = readHeader(target);
     if (/^#![^\r\n]*\bnode\b/.test(text)) return { path: path.resolve(target), node: true };
-  }
-  if (/\.(cmd|bat)$/i.test(real)) {
-    throw new Error("Cannot resolve the vp shim. Set vpPath to vite-plus/bin/vp.");
   }
   return { path: file, node: false };
 }
@@ -96,7 +141,7 @@ try {
     const names = process.platform === "win32" ? ["vp.cmd", "vp.exe", "vp"] : ["vp"];
     for (const dir of (process.env[pathKey] || "").split(path.delimiter).filter(Boolean)) {
       for (const name of names) {
-        result = executable(path.resolve(dir, name));
+        result = executable(path.resolve(start, dir, name));
         if (result) break;
       }
       if (result) break;

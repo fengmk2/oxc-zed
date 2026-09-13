@@ -10,6 +10,9 @@ use std::{
 };
 use zed_extension_api::serde_json::json;
 
+const NPM_SHELL_SHIM: &str = include_str!("fixtures/npm-vp.sh");
+const NPM_CMD_SHIM: &str = include_str!("fixtures/npm-vp.cmd");
+
 struct Tree(PathBuf);
 impl Tree {
     fn new() -> Self {
@@ -265,7 +268,7 @@ fn explicit_paths_and_pnpm_shims_resolve_without_system_node() {
     tree.install("repo", "vite-plus", "vp");
     tree.put(
         "repo/node_modules/.bin/vp",
-        "#!/bin/sh\nexec node \"$basedir/../vite-plus/bin/vp\" \"$@\"\n",
+        &NPM_SHELL_SHIM.replace("{{target}}", "../vite-plus/bin/vp"),
     );
     let executable = probe("executable", &tree.path("repo"), "node_modules/.bin/vp", "");
     assert_eq!(executable["node"], true);
@@ -274,8 +277,89 @@ fn explicit_paths_and_pnpm_shims_resolve_without_system_node() {
         tree.0.join("repo/node_modules/vite-plus/bin/vp").canonicalize().unwrap()
     );
     assert_eq!(probe("executable", &tree.path("repo"), "missing", ""), Value::Null);
-    tree.put("repo/vp.cmd", "@ECHO off\n\"%dp0%/node_modules/vite-plus/bin/vp\"\n");
+    tree.put(
+        "repo/vp.cmd",
+        &NPM_CMD_SHIM.replace("{{target}}", "%dp0%/node_modules/vite-plus/bin/vp"),
+    );
     assert_eq!(probe("executable", &tree.path("repo"), "vp.cmd", "")["node"], true);
+}
+
+#[test]
+fn global_relative_path_entries_use_the_worktree_directory() {
+    let tree = Tree::new();
+    tree.put("repo/tools/vp", "#!/usr/bin/env node\n");
+    tree.put("host/tools/vp", "#!/usr/bin/env node\n");
+    let search_path = std::env::join_paths([Path::new("missing"), Path::new("tools")]).unwrap();
+    let output = Command::new(node())
+        .args(["-e", PROJECT_SCRIPT, "--", "global", &tree.path("repo"), "vp"])
+        .current_dir(tree.path("host"))
+        .env("PATH", search_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let executable: Value = from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        Path::new(executable["path"].as_str().unwrap()).canonicalize().unwrap(),
+        tree.0.join("repo/tools/vp").canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn custom_wrappers_preserve_environment_and_arguments() {
+    let tree = Tree::new();
+    tree.put("repo/entry.js", "#!/usr/bin/env node\nconsole.log(JSON.stringify({args:process.argv.slice(2),marker:process.env.VP_WRAPPER_MARKER}));");
+    let wrapper = if cfg!(windows) {
+        tree.put(
+            "repo/custom vp.cmd",
+            "@ECHO off\nSET VP_WRAPPER_MARKER=configured\nnode \"%~dp0entry.js\" --custom %*\n",
+        );
+        "custom vp.cmd"
+    } else {
+        tree.put("repo/custom vp", &format!("#!/bin/sh\nexport VP_WRAPPER_MARKER=configured\nexec node \"{}\" --custom \"$@\"\n", tree.path("repo/entry.js")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(tree.0.join("repo/custom vp"), fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        "custom vp"
+    };
+    let executable = probe("executable", &tree.path("repo"), wrapper, "");
+    assert_eq!(executable["node"], false);
+    let output = Command::new(node())
+        .args([
+            "-e",
+            LAUNCH_SCRIPT,
+            "--",
+            &tree.path("repo"),
+            executable["path"].as_str().unwrap(),
+            "native",
+            "lint",
+        ])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let output: Value = from_slice(&output.stdout).unwrap();
+    assert_eq!(output["args"], json!(["--custom", "lint", "--lsp"]));
+    assert_eq!(output["marker"], "configured");
+}
+
+#[test]
+fn modified_package_manager_shims_are_kept_intact() {
+    let tree = Tree::new();
+    tree.install("repo", "vite-plus", "vp");
+    let shell = NPM_SHELL_SHIM.replace("{{target}}", "node_modules/vite-plus/bin/vp");
+    let cmd = NPM_CMD_SHIM.replace("{{target}}", "%dp0%/node_modules/vite-plus/bin/vp");
+    for modified in [
+        shell.replace("#!/bin/sh\n", "#!/bin/sh\nexport VP_WRAPPER_MARKER=configured\n"),
+        shell.replace("\"$@\"", "--custom \"$@\""),
+        cmd.replace("@ECHO off\n", "@ECHO off\nSET VP_WRAPPER_MARKER=configured\n"),
+        cmd.replace(" %*", " --custom %*"),
+    ] {
+        tree.put("repo/vp", &modified);
+        assert_eq!(probe("executable", &tree.path("repo"), "vp", "")["node"], false);
+    }
 }
 
 #[test]
@@ -364,7 +448,7 @@ fn explicit_js_and_absolute_shim_targets_use_zed_node() {
     assert_eq!(probe("executable", &tree.path("."), "vp.js", "")["node"], true);
     tree.install("global", "vite-plus", "vp");
     let target = tree.path("global/node_modules/vite-plus/bin/vp");
-    tree.put("vp.cmd", &format!("@ECHO OFF\nnode \"{target}\" %*\n"));
+    tree.put("vp.cmd", &NPM_CMD_SHIM.replace("{{target}}", &target));
     assert_eq!(probe("executable", &tree.path("."), "vp.cmd", "")["path"], target);
 }
 
@@ -375,7 +459,10 @@ fn symlinked_global_pnpm_shim_keeps_its_recorded_entry() {
     tree.install("global", "vite-plus", "vp");
     tree.put(
         "global/vp",
-        "#!/bin/sh\nexec node \"$basedir/node_modules/vite-plus/bin/vp\" \"$@\"\n",
+        &NPM_SHELL_SHIM.replace("{{target}}", "node_modules/vite-plus/bin/vp").replace(
+            "if [ -x",
+            "if [ -z \"$NODE_PATH\" ]; then\n  export NODE_PATH=\"/global/node_modules\"\nelse\n  export NODE_PATH=\"/global/node_modules:$NODE_PATH\"\nfi\nif [ -x",
+        ),
     );
     fs::create_dir_all(tree.0.join("bin")).unwrap();
     std::os::unix::fs::symlink(tree.0.join("global/vp"), tree.0.join("bin/vp")).unwrap();
